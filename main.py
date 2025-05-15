@@ -37,9 +37,16 @@ if channel_secret is None:
 if channel_access_token is None:
     print("Specify ChannelAccessToken as environment variable.")
     sys.exit(1)
-if not USE_VERTEX and not GOOGLE_API_KEY:
+if USE_VERTEX == "True":  # Check if USE_VERTEX is true as a string
+    GOOGLE_CLOUD_PROJECT = os.getenv("GOOGLE_CLOUD_PROJECT")
+    GOOGLE_CLOUD_LOCATION = os.getenv("GOOGLE_CLOUD_LOCATION")
+    if not GOOGLE_CLOUD_PROJECT:
+        raise ValueError("Please set GOOGLE_CLOUD_PROJECT via env var or code when USE_VERTEX is true.")
+    if not GOOGLE_CLOUD_LOCATION:
+        raise ValueError("Please set GOOGLE_CLOUD_LOCATION via env var or code when USE_VERTEX is true.")
+elif not GOOGLE_API_KEY:  # Original check for GOOGLE_API_KEY when USE_VERTEX is false
     raise ValueError(
-        "Please set GOOGLE_GENAI_USE_VERTEXAI, GOOGLE_API_KEY via env var or code."
+        "Please set GOOGLE_API_KEY via env var or code."
     )
 
 # Initialize the FastAPI app for LINEBot
