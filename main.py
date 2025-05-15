@@ -16,6 +16,7 @@ from multi_tool_agent.agent import (
     get_current_time,
 )
 from google.adk.agents import Agent
+from google.adk.tools import google_search
 
 # Import necessary session components
 from google.adk.sessions import InMemorySessionService
@@ -41,13 +42,15 @@ if USE_VERTEX == "True":  # Check if USE_VERTEX is true as a string
     GOOGLE_CLOUD_PROJECT = os.getenv("GOOGLE_CLOUD_PROJECT")
     GOOGLE_CLOUD_LOCATION = os.getenv("GOOGLE_CLOUD_LOCATION")
     if not GOOGLE_CLOUD_PROJECT:
-        raise ValueError("Please set GOOGLE_CLOUD_PROJECT via env var or code when USE_VERTEX is true.")
+        raise ValueError(
+            "Please set GOOGLE_CLOUD_PROJECT via env var or code when USE_VERTEX is true."
+        )
     if not GOOGLE_CLOUD_LOCATION:
-        raise ValueError("Please set GOOGLE_CLOUD_LOCATION via env var or code when USE_VERTEX is true.")
+        raise ValueError(
+            "Please set GOOGLE_CLOUD_LOCATION via env var or code when USE_VERTEX is true."
+        )
 elif not GOOGLE_API_KEY:  # Original check for GOOGLE_API_KEY when USE_VERTEX is false
-    raise ValueError(
-        "Please set GOOGLE_API_KEY via env var or code."
-    )
+    raise ValueError("Please set GOOGLE_API_KEY via env var or code.")
 
 # Initialize the FastAPI app for LINEBot
 app = FastAPI()
@@ -56,13 +59,31 @@ async_http_client = AiohttpAsyncHttpClient(session)
 line_bot_api = AsyncLineBotApi(channel_access_token, async_http_client)
 parser = WebhookParser(channel_secret)
 
-# Initialize ADK client
 root_agent = Agent(
-    name="weather_time_agent",
-    model="gemini-2.0-flash-exp",
-    description=("Agent to answer questions about the time and weather in a city."),
-    instruction=("I can answer your questions about the time and weather in a city."),
-    tools=[get_weather, get_current_time],
+    name="location_search_agent",
+    model="gemini-2.0-flash",
+    description="Agent tasked with generating creative and fun dating plan suggestions",
+    instruction="""
+
+        You are a specialized AI assistant tasked with generating creative and fun plan suggestions.
+
+        **Request:**
+        For the upcoming weekend, specifically from **[START_DATE_YYYY-MM-DD]** to **[END_DATE_YYYY-MM-DD]**, in the location specified as **[TARGET_LOCATION_NAME_OR_CITY_STATE]** (if latitude/longitude are provided, use these: Lat: **[TARGET_LATITUDE]**, Lon: **[TARGET_LONGITUDE]**), please generate **[NUMBER_OF_PLANS_TO_GENERATE, e.g., 3]** distinct dating plan suggestions.
+
+        **Constraints and Guidelines for Suggestions:**
+        1.  **Creativity & Fun:** Plans should be engaging, memorable, and offer a good experience for a date.
+        2.  **Budget:** All generated plans should aim for a moderate budget (conceptually "$$"), meaning they should be affordable yet offer good value, without being overly cheap or extravagant. This budget level should be *reflected in the choice of activities and venues*, but **do not** explicitly state "Budget: $$" in the `plan_description`.
+        3.  **Interest Alignment:**
+            *   Consider the following user interests: **[COMMA_SEPARATED_LIST_OF_INTERESTS, e.g., outdoors, arts & culture, foodie, nightlife, unique local events, live music, active/sports]**. Tailor suggestions specifically to these where possible. The plan should *embody* these interests.
+            *   **Fallback:** If specific events or venues perfectly matching all listed user interests cannot be found for the specified weekend, you should create a creative and fun generic dating plan that is still appealing, suitable for the location, and adheres to the moderate budget. This plan should still sound exciting and fun, even if it's more general.
+        4.  **Current & Specific:** Prioritize finding specific, current events, festivals, pop-ups, or unique local venues operating or happening during the specified weekend dates. If exact current events cannot be found, suggest appealing evergreen options or implement the fallback generic plan.
+        5.  **Location Details:** For each place or event mentioned within a plan, you MUST provide its name, precise latitude, precise longitude, and a brief, helpful description.
+
+        **Output Format:**
+        RETURN PLAN
+
+    """,
+    tools=[google_search],
 )
 print(f"Agent '{root_agent.name}' created.")
 
