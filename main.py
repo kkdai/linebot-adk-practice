@@ -7,42 +7,37 @@ import aiohttp
 from fastapi import Request, FastAPI, HTTPException
 from zoneinfo import ZoneInfo
 
-from linebot.models import (
-    MessageEvent, TextSendMessage
-)
-from linebot.exceptions import (
-    InvalidSignatureError
-)
+from linebot.models import MessageEvent, TextSendMessage
+from linebot.exceptions import InvalidSignatureError
 from linebot.aiohttp_async_http_client import AiohttpAsyncHttpClient
-from linebot import (
-    AsyncLineBotApi, WebhookParser
-)
+from linebot import AsyncLineBotApi, WebhookParser
 from multi_tool_agent.agent import (
     get_weather,
     get_current_time,
 )
 from google.adk.agents import Agent
+
 # Import necessary session components
 from google.adk.sessions import InMemorySessionService
 from google.adk.runners import Runner
 from google.genai import types
 
 # OpenAI Agent configuration
-USE_VERTEX = os.getenv("GOOGLE_GENAI_USE_VERTEXAI") or "FALSE"
+USE_VERTEX = os.getenv("GOOGLE_GENAI_USE_VERTEXAI") or "False"
 GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY") or ""
 
 # LINE Bot configuration
-channel_secret = os.getenv('ChannelSecret', None)
-channel_access_token = os.getenv('ChannelAccessToken', None)
+channel_secret = os.getenv("ChannelSecret", None)
+channel_access_token = os.getenv("ChannelAccessToken", None)
 
 # Validate environment variables
 if channel_secret is None:
-    print('Specify ChannelSecret as environment variable.')
+    print("Specify ChannelSecret as environment variable.")
     sys.exit(1)
 if channel_access_token is None:
-    print('Specify ChannelAccessToken as environment variable.')
+    print("Specify ChannelAccessToken as environment variable.")
     sys.exit(1)
-if not USE_VERTEX or not GOOGLE_API_KEY:
+if not USE_VERTEX and not GOOGLE_API_KEY:
     raise ValueError(
         "Please set GOOGLE_GENAI_USE_VERTEXAI, GOOGLE_API_KEY via env var or code."
     )
@@ -58,12 +53,8 @@ parser = WebhookParser(channel_secret)
 root_agent = Agent(
     name="weather_time_agent",
     model="gemini-2.0-flash-exp",
-    description=(
-        "Agent to answer questions about the time and weather in a city."
-    ),
-    instruction=(
-        "I can answer your questions about the time and weather in a city."
-    ),
+    description=("Agent to answer questions about the time and weather in a city."),
+    instruction=("I can answer your questions about the time and weather in a city."),
     tools=[get_weather, get_current_time],
 )
 print(f"Agent '{root_agent.name}' created.")
@@ -88,18 +79,18 @@ def get_or_create_session(user_id):
         # Create a new session for this user
         session_id = f"session_{user_id}"
         session = session_service.create_session(
-            app_name=APP_NAME,
-            user_id=user_id,
-            session_id=session_id
+            app_name=APP_NAME, user_id=user_id, session_id=session_id
         )
         active_sessions[user_id] = session_id
         print(
-            f"New session created: App='{APP_NAME}', User='{user_id}', Session='{session_id}'")
+            f"New session created: App='{APP_NAME}', User='{user_id}', Session='{session_id}'"
+        )
     else:
         # Use existing session
         session_id = active_sessions[user_id]
         print(
-            f"Using existing session: App='{APP_NAME}', User='{user_id}', Session='{session_id}'")
+            f"Using existing session: App='{APP_NAME}', User='{user_id}', Session='{session_id}'"
+        )
 
     return session_id
 
@@ -107,15 +98,15 @@ def get_or_create_session(user_id):
 # Key Concept: Runner orchestrates the agent execution loop.
 runner = Runner(
     agent=root_agent,  # The agent we want to run
-    app_name=APP_NAME,   # Associates runs with our app
-    session_service=session_service  # Uses our session manager
+    app_name=APP_NAME,  # Associates runs with our app
+    session_service=session_service,  # Uses our session manager
 )
 print(f"Runner created for agent '{runner.agent.name}'.")
 
 
 @app.post("/")
 async def handle_callback(request: Request):
-    signature = request.headers['X-Line-Signature']
+    signature = request.headers["X-Line-Signature"]
 
     # get request body as text
     body = await request.body()
@@ -139,16 +130,13 @@ async def handle_callback(request: Request):
             # Use the user's prompt directly with the agent
             response = await call_agent_async(msg, user_id)
             reply_msg = TextSendMessage(text=response)
-            await line_bot_api.reply_message(
-                event.reply_token,
-                reply_msg
-            )
+            await line_bot_api.reply_message(event.reply_token, reply_msg)
         elif event.message.type == "image":
-            return 'OK'
+            return "OK"
         else:
             continue
 
-    return 'OK'
+    return "OK"
 
 
 async def call_agent_async(query: str, user_id: str) -> str:
@@ -159,14 +147,16 @@ async def call_agent_async(query: str, user_id: str) -> str:
     session_id = get_or_create_session(user_id)
 
     # Prepare the user's message in ADK format
-    content = types.Content(role='user', parts=[types.Part(text=query)])
+    content = types.Content(role="user", parts=[types.Part(text=query)])
 
     final_response_text = "Agent did not produce a final response."  # Default
 
     try:
         # Key Concept: run_async executes the agent logic and yields Events.
         # We iterate through events to find the final answer.
-        async for event in runner.run_async(user_id=user_id, session_id=session_id, new_message=content):
+        async for event in runner.run_async(
+            user_id=user_id, session_id=session_id, new_message=content
+        ):
             # You can uncomment the line below to see *all* events during execution
             # print(f"  [Event] Author: {event.author}, Type: {type(event).__name__}, Final: {event.is_final_response()}, Content: {event.content}")
 
@@ -175,7 +165,9 @@ async def call_agent_async(query: str, user_id: str) -> str:
                 if event.content and event.content.parts:
                     # Assuming text response in the first part
                     final_response_text = event.content.parts[0].text
-                elif event.actions and event.actions.escalate:  # Handle potential errors/escalations
+                elif (
+                    event.actions and event.actions.escalate
+                ):  # Handle potential errors/escalations
                     final_response_text = f"Agent escalated: {event.error_message or 'No specific message.'}"
                 # Add more checks here if needed (e.g., specific error codes)
                 break  # Stop processing events once the final response is found
@@ -188,7 +180,9 @@ async def call_agent_async(query: str, user_id: str) -> str:
             session_id = get_or_create_session(user_id)  # Create a new one
             # Try again with the new session
             try:
-                async for event in runner.run_async(user_id=user_id, session_id=session_id, new_message=content):
+                async for event in runner.run_async(
+                    user_id=user_id, session_id=session_id, new_message=content
+                ):
                     # Same event handling code as above
                     if event.is_final_response():
                         if event.content and event.content.parts:
