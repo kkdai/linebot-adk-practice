@@ -2,6 +2,7 @@ from fastapi import Request, FastAPI, HTTPException
 import os
 import sys
 import aiohttp
+import uuid  # Added import
 
 from linebot.models import MessageEvent, TextSendMessage
 from linebot.exceptions import InvalidSignatureError
@@ -238,18 +239,39 @@ async def call_agent_async(query: str, user_id: str) -> str:
                 # Add more checks here if needed (e.g., specific error codes)
                 break  # Stop processing events once the final response is found
     except ValueError as e:
-        # Handle errors, especially session not found
-        print(f"Error processing request: {str(e)}")
-        # Recreate session if it was lost
         if "Session not found" in str(e):
-            active_sessions.pop(user_id, None)  # Remove the invalid session
-            session_id = get_or_create_session(user_id)  # Create a new one
-            # Try again with the new session
+            print(
+                f"Session {session_id} not found for user {user_id}. Attempting recreation with a unique ID."
+            )
+            active_sessions.pop(
+                user_id, None
+            )  # Remove the invalid session from local cache
+
+            # Generate a new, guaranteed unique session ID for the retry
+            new_session_id_for_retry = f"session_{user_id}_{uuid.uuid4().hex[:8]}"
+            print(
+                f"Generated new unique session ID for retry: {new_session_id_for_retry}"
+            )
+
             try:
-                async for (
-                    event
-                ) in chosen_agent_runner.run_async(  # Use the chosen_agent_runner
-                    user_id=user_id, session_id=session_id, new_message=content
+                # Attempt to create this new session directly with the session_service
+                session_service.create_session(
+                    app_name=APP_NAME,
+                    user_id=user_id,
+                    session_id=new_session_id_for_retry,
+                )
+                active_sessions[user_id] = (
+                    new_session_id_for_retry  # Update local cache with the new ID
+                )
+
+                print(
+                    f"New session {new_session_id_for_retry} created and cached for user {user_id}. Retrying agent run."
+                )
+                # Try the agent run again with the new, unique session ID
+                async for event in chosen_agent_runner.run_async(
+                    user_id=user_id,
+                    session_id=new_session_id_for_retry,
+                    new_message=content,
                 ):
                     if event.is_final_response():
                         if event.content and event.content.parts:
@@ -261,14 +283,16 @@ async def call_agent_async(query: str, user_id: str) -> str:
                         elif event.actions and event.actions.escalate:
                             final_response_text = f"Escalation from agent: {event.actions.escalate.message}"
                         break
-            except Exception as e2:
+            except Exception as e2:  # This catches errors from the create_session call or the second run_async
+                print(f"Persistent error after session recreation attempt: {str(e2)}")
                 final_response_text = (
                     f"Sorry, I encountered a persistent error after session"
                     f" recreation: {str(e2)}"
                 )
-        else:
+        else:  # Original ValueError was not "Session not found"
+            print(f"ValueError processing request: {str(e)}")
             final_response_text = f"Sorry, I encountered an error: {str(e)}"
-    except Exception as e:  # Catch other potential errors during agent run
+    except Exception as e:  # Catch other potential errors during the initial agent run
         print(f"An unexpected error occurred during agent execution: {str(e)}")
         final_response_text = f"Sorry, an unexpected error occurred: {str(e)}"
 
