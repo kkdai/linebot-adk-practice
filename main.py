@@ -10,7 +10,6 @@ from linebot import AsyncLineBotApi, WebhookParser
 
 # ADK and GenAI imports
 from google.adk.agents import Agent
-from google.adk.tools import google_search
 from google.adk.runners import Runner
 from google.genai import types
 from google.adk.sessions import InMemorySessionService  # Add this import
@@ -63,34 +62,6 @@ async_http_client = AiohttpAsyncHttpClient(client_session)
 line_bot_api = AsyncLineBotApi(channel_access_token, async_http_client)
 parser = WebhookParser(channel_secret)
 
-root_agent = Agent(
-    name="location_search_agent",
-    model="gemini-2.0-flash",
-    description="Agent tasked with generating creative and fun dating plan suggestions",
-    instruction="""
-
-        You are a specialized AI assistant tasked with generating creative and fun plan suggestions.
-
-        **Request:**
-        For the upcoming weekend, specifically from **[START_DATE_YYYY-MM-DD]** to **[END_DATE_YYYY-MM-DD]**, in the location specified as **[TARGET_LOCATION_NAME_OR_CITY_STATE]** (if latitude/longitude are provided, use these: Lat: **[TARGET_LATITUDE]**, Lon: **[TARGET_LONGITUDE]**), please generate **[NUMBER_OF_PLANS_TO_GENERATE, e.g., 3]** distinct dating plan suggestions.
-
-        **Constraints and Guidelines for Suggestions:**
-        1.  **Creativity & Fun:** Plans should be engaging, memorable, and offer a good experience for a date.
-        2.  **Budget:** All generated plans should aim for a moderate budget (conceptually "$$"), meaning they should be affordable yet offer good value, without being overly cheap or extravagant. This budget level should be *reflected in the choice of activities and venues*, but **do not** explicitly state "Budget: $$" in the `plan_description`.
-        3.  **Interest Alignment:**
-            *   Consider the following user interests: **[COMMA_SEPARATED_LIST_OF_INTERESTS, e.g., outdoors, arts & culture, foodie, nightlife, unique local events, live music, active/sports]**. Tailor suggestions specifically to these where possible. The plan should *embody* these interests.
-            *   **Fallback:** If specific events or venues perfectly matching all listed user interests cannot be found for the specified weekend, you should create a creative and fun generic dating plan that is still appealing, suitable for the location, and adheres to the moderate budget. This plan should still sound exciting and fun, even if it's more general.
-        4.  **Current & Specific:** Prioritize finding specific, current events, festivals, pop-ups, or unique local venues operating or happening during the specified weekend dates. If exact current events cannot be found, suggest appealing evergreen options or implement the fallback generic plan.
-        5.  **Location Details:** For each place or event mentioned within a plan, you MUST provide its name, precise latitude, precise longitude, and a brief, helpful description.
-
-        **Output Format:**
-        RETURN PLAN
-
-    """,
-    tools=[google_search],
-)
-print(f"Agent '{root_agent.name}' created.")
-
 # --- Stock Agent Definition ---
 stock_agent = Agent(
     name="stock_agent",
@@ -115,15 +86,6 @@ stock_agent = Agent(
 print(f"Agent '{stock_agent.name}' created.")
 
 APP_NAME = "linebot_adk_app"
-
-# Define Runners globally after agents are defined
-runner = Runner(
-    agent=root_agent,
-    app_name=APP_NAME,
-    session_service=session_service,  # Add session_service
-)
-print(f"Runner created for agent '{runner.agent.name}'.")
-
 stock_runner = Runner(
     agent=stock_agent,
     app_name=APP_NAME,
@@ -193,24 +155,7 @@ async def call_agent_async(query: str, user_id: str) -> str:
     content = types.Content(role="user", parts=[types.Part(text=query)])
     final_response_text = "Agent did not produce a final response."
 
-    chosen_agent_runner = runner
-    stock_keywords = [
-        "stock",
-        "price of",
-        "perform",
-        "ticker",
-        "symbol",
-        "shares",
-        "market",
-        "漲跌",
-        "股價",
-    ]
-    if any(keyword in query.lower() for keyword in stock_keywords):
-        print(f"Routing to stock_agent for query: {query}")
-        chosen_agent_runner = stock_runner
-    else:
-        print(f"Routing to root_agent for query: {query}")
-
+    chosen_agent_runner = stock_runner
     session_id = get_or_create_session(user_id)
     max_retries = 1
 
