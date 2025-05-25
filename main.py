@@ -86,12 +86,12 @@ stock_agent = Agent(
 print(f"Agent '{stock_agent.name}' created.")
 
 APP_NAME = "linebot_adk_app"
-stock_runner = Runner(
+root_agent = Runner(
     agent=stock_agent,
     app_name=APP_NAME,
     session_service=session_service,  # Add session_service
 )
-print(f"Runner created for agent '{stock_runner.agent.name}'.")
+print(f"Runner created for agent '{root_agent.agent.name}'.")
 
 
 def get_or_create_session(user_id):
@@ -115,9 +115,20 @@ def get_or_create_session(user_id):
     return session_id
 
 
+# Key Concept: Runner orchestrates the agent execution loop.
+runner = Runner(
+    agent=root_agent,  # The agent we want to run
+    app_name=APP_NAME,  # Associates runs with our app
+    session_service=session_service,  # Uses our session manager
+)
+print(f"Runner created for agent '{runner.agent.name}'.")
+
+
 @app.post("/")
 async def handle_callback(request: Request):
     signature = request.headers["X-Line-Signature"]
+
+    # get request body as text
     body = await request.body()
     body = body.decode()
 
@@ -141,78 +152,68 @@ async def handle_callback(request: Request):
             reply_msg = TextSendMessage(text=response)
             await line_bot_api.reply_message(event.reply_token, reply_msg)
         elif event.message.type == "image":
-            # return "OK" # Original line, can be pass if no specific OK is needed
-            pass  # Explicitly pass if no action
-        # else: # This else continue is redundant if the outer loop continues
-        # continue
+            return "OK"
+        else:
+            continue
 
     return "OK"
 
 
 async def call_agent_async(query: str, user_id: str) -> str:
-    """Sends a query to the agent and returns the final response."""
+    """Sends a query to the agent and prints the final response."""
     print(f"\n>>> User Query: {query}")
-    content = types.Content(role="user", parts=[types.Part(text=query)])
-    final_response_text = "Agent did not produce a final response."
 
-    chosen_agent_runner = stock_runner
+    # Get or create a session for this user
     session_id = get_or_create_session(user_id)
-    max_retries = 1
 
-    for attempt in range(max_retries + 1):
-        try:
-            async for event in chosen_agent_runner.run_async(
-                user_id=user_id, session_id=session_id, new_message=content
-            ):
-                if event.is_final_response():
-                    if event.content and event.content.parts:
-                        final_response_text = "".join(
-                            part.text
-                            for part in event.content.parts
-                            if hasattr(part, "text")
-                        )
-                    elif event.actions and event.actions.escalate:
-                        final_response_text = (
-                            f"Escalation from agent: {event.actions.escalate.message}"
-                        )
-                    break  # Break from async for loop once final response is processed
-            break  # Break from retry loop if successful
-        except ValueError as e:
-            if "Session not found" in str(e) and attempt < max_retries:
-                print(
-                    f"Attempt {attempt + 1}: Session {session_id} not found. Recreating session."
-                )
-                if user_id in active_sessions:
-                    del active_sessions[user_id]  # Clear stale session ID
+    # Prepare the user's message in ADK format
+    content = types.Content(role="user", parts=[types.Part(text=query)])
 
-                # Attempt to create a new session, letting ADK generate the ID
-                try:
-                    new_session_context = session_service.create_session(
-                        app_name=APP_NAME, user_id=user_id
-                    )
-                    session_id = new_session_context.session_id
-                    active_sessions[user_id] = session_id
-                    print(f"New session created for retry: {session_id}")
-                    # Continue to the next iteration of the retry loop
-                except Exception as creation_error:
-                    print(f"Error creating new session during retry: {creation_error}")
-                    final_response_text = f"Sorry, there was an issue creating a new session: {creation_error}"
-                    break  # Break from retry loop if session creation fails
-            else:
-                print(f"An error occurred during agent execution: {e}")
-                final_response_text = f"Sorry, an error occurred: {e}"
-                break  # Break from retry loop for other errors or max retries
-        except Exception as e:
-            print(f"An unexpected error occurred during agent execution: {e}")
-            final_response_text = f"Sorry, an unexpected error occurred: {e}"
-            break  # Break from retry loop
+    final_response_text = "Agent did not produce a final response."  # Default
+
+    try:
+        # Key Concept: run_async executes the agent logic and yields Events.
+        # We iterate through events to find the final answer.
+        async for event in runner.run_async(
+            user_id=user_id, session_id=session_id, new_message=content
+        ):
+            # You can uncomment the line below to see *all* events during execution
+            # print(f"  [Event] Author: {event.author}, Type: {type(event).__name__}, Final: {event.is_final_response()}, Content: {event.content}")
+
+            # Key Concept: is_final_response() marks the concluding message for the turn.
+            if event.is_final_response():
+                if event.content and event.content.parts:
+                    # Assuming text response in the first part
+                    final_response_text = event.content.parts[0].text
+                elif (
+                    event.actions and event.actions.escalate
+                ):  # Handle potential errors/escalations
+                    final_response_text = f"Agent escalated: {event.error_message or 'No specific message.'}"
+                # Add more checks here if needed (e.g., specific error codes)
+                break  # Stop processing events once the final response is found
+    except ValueError as e:
+        # Handle errors, especially session not found
+        print(f"Error processing request: {str(e)}")
+        # Recreate session if it was lost
+        if "Session not found" in str(e):
+            active_sessions.pop(user_id, None)  # Remove the invalid session
+            session_id = get_or_create_session(user_id)  # Create a new one
+            # Try again with the new session
+            try:
+                async for event in runner.run_async(
+                    user_id=user_id, session_id=session_id, new_message=content
+                ):
+                    # Same event handling code as above
+                    if event.is_final_response():
+                        if event.content and event.content.parts:
+                            final_response_text = event.content.parts[0].text
+                        elif event.actions and event.actions.escalate:
+                            final_response_text = f"Agent escalated: {event.error_message or 'No specific message.'}"
+                        break
+            except Exception as e2:
+                final_response_text = f"Sorry, I encountered an error: {str(e2)}"
+        else:
+            final_response_text = f"Sorry, I encountered an error: {str(e)}"
 
     print(f"<<< Agent Response: {final_response_text}")
     return final_response_text
-
-
-# Add lifespan event for session cleanup
-@app.on_event("shutdown")
-async def shutdown_event():
-    await client_session.close()
-    print("Client session closed.")
