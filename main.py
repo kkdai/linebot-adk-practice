@@ -185,28 +185,35 @@ async def call_agent_async(query: str, user_id: str) -> str:
                 # Add more checks here if needed (e.g., specific error codes)
                 break  # Stop processing events once the final response is found
     except ValueError as e:
-        # Handle errors, especially session not found
-        print(f"Error processing request: {str(e)}")
-        # Recreate session if it was lost
         if "Session not found" in str(e):
-            active_sessions.pop(user_id, None)  # Remove the invalid session
-            session_id = get_or_create_session(user_id)  # Create a new one
-            # Try again with the new session
+            print(f"Initial 'Session not found' error: {str(e)}. Attempting to recreate session and retry.")
+            active_sessions.pop(user_id, None)
+            new_session_id = get_or_create_session(user_id) # Renamed to avoid confusion
+            print(f"Retrying with new session: {new_session_id}")
             try:
+                # Initialize final_response_text for the retry attempt
+                retry_final_response_text = "Agent did not produce a final response on retry." 
                 async for event in runner.run_async(
-                    user_id=user_id, session_id=session_id, new_message=content
+                    user_id=user_id, session_id=new_session_id, new_message=content
                 ):
-                    # Same event handling code as above
                     if event.is_final_response():
                         if event.content and event.content.parts:
-                            final_response_text = event.content.parts[0].text
+                            retry_final_response_text = event.content.parts[0].text
                         elif event.actions and event.actions.escalate:
-                            final_response_text = f"Agent escalated: {event.error_message or 'No specific message.'}"
-                        break
+                            retry_final_response_text = f"Agent escalated on retry: {event.error_message or 'No specific message.'}"
+                        break 
+                final_response_text = retry_final_response_text # Assign retry result here
             except Exception as e2:
-                final_response_text = f"Sorry, I encountered an error: {str(e2)}"
+                print(f"Error during retry attempt: {str(e2)}")
+                final_response_text = f"Sorry, I encountered an error after a session issue: {str(e2)}"
         else:
+            # This is for ValueErrors not related to "Session not found"
+            print(f"Error processing request (non-session related ValueError): {str(e)}")
             final_response_text = f"Sorry, I encountered an error: {str(e)}"
+    except Exception as ex:
+        # Catch any other unexpected errors
+        print(f"An unexpected error occurred: {str(ex)}")
+        final_response_text = f"Sorry, an unexpected error occurred: {str(ex)}"
 
     print(f"<<< Agent Response: {final_response_text}")
     return final_response_text
