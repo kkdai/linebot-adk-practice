@@ -235,11 +235,31 @@ async def call_agent_async(query: str, user_id: str) -> str:
         except ValueError as e:
             if "Session not found" in str(e) and attempt < max_retries:
                 print(
-                    f"Attempt {attempt + 1}: Session {session_id} not found. Recreating session and retrying."
+                    f"Attempt {attempt + 1}: Session {session_id} not found. Recreating session with ADK-generated ID and retrying."
                 )
                 if user_id in active_sessions:  # Clean up potentially stale cache
                     del active_sessions[user_id]
-                session_id = get_or_create_session(user_id)  # Get a new session_id
+
+                # Create a new session, letting ADK generate the ID
+                try:
+                    new_session_context = session_service.create_session(
+                        app_name=APP_NAME, user_id=user_id
+                    )
+                    session_id = (
+                        new_session_context.session_id
+                    )  # Use the new, ADK-generated ID
+                    active_sessions[user_id] = (
+                        session_id  # Cache the new, working ID for subsequent calls
+                    )
+                    print(
+                        f"New session with ADK-generated ID created for retry: {session_id}"
+                    )
+                except Exception as creation_error:
+                    print(
+                        f"Error creating new session during retry: {str(creation_error)}"
+                    )
+                    final_response_text = f"Sorry, an error occurred while trying to re-establish a session: {str(creation_error)}"
+                    break  # Break from retry loop if session creation itself fails
             else:
                 print(f"An error occurred during agent execution: {str(e)}")
                 final_response_text = f"Sorry, an error occurred: {str(e)}"
