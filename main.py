@@ -150,7 +150,7 @@ async def handle_callback(request: Request):
 
 
 async def call_agent_async(query: str, user_id: str) -> str:
-    """Sends a query to the agent and prints the final response."""
+    """Sends a query to the agent and returns the final response."""
     print(f"\n>>> User Query: {query}")
     content = types.Content(role="user", parts=[types.Part(text=query)])
     final_response_text = "Agent did not produce a final response."
@@ -175,43 +175,36 @@ async def call_agent_async(query: str, user_id: str) -> str:
                         final_response_text = (
                             f"Escalation from agent: {event.actions.escalate.message}"
                         )
-                    break
+                    break  # Break from async for loop once final response is processed
             break  # Break from retry loop if successful
         except ValueError as e:
             if "Session not found" in str(e) and attempt < max_retries:
                 print(
-                    f"Attempt {attempt + 1}: Session {session_id} not found. Recreating session with ADK-generated ID and retrying."
+                    f"Attempt {attempt + 1}: Session {session_id} not found. Recreating session."
                 )
-                if user_id in active_sessions:  # Clean up potentially stale cache
-                    del active_sessions[user_id]
+                if user_id in active_sessions:
+                    del active_sessions[user_id]  # Clear stale session ID
 
-                # Create a new session, letting ADK generate the ID
+                # Attempt to create a new session, letting ADK generate the ID
                 try:
                     new_session_context = session_service.create_session(
                         app_name=APP_NAME, user_id=user_id
                     )
-                    session_id = (
-                        new_session_context.session_id
-                    )  # Use the new, ADK-generated ID
-                    active_sessions[user_id] = (
-                        session_id  # Cache the new, working ID for subsequent calls
-                    )
-                    print(
-                        f"New session with ADK-generated ID created for retry: {session_id}"
-                    )
+                    session_id = new_session_context.session_id
+                    active_sessions[user_id] = session_id
+                    print(f"New session created for retry: {session_id}")
+                    # Continue to the next iteration of the retry loop
                 except Exception as creation_error:
-                    print(
-                        f"Error creating new session during retry: {str(creation_error)}"
-                    )
-                    final_response_text = f"Sorry, an error occurred while trying to re-establish a session: {str(creation_error)}"
-                    break  # Break from retry loop if session creation itself fails
+                    print(f"Error creating new session during retry: {creation_error}")
+                    final_response_text = f"Sorry, there was an issue creating a new session: {creation_error}"
+                    break  # Break from retry loop if session creation fails
             else:
-                print(f"An error occurred during agent execution: {str(e)}")
-                final_response_text = f"Sorry, an error occurred: {str(e)}"
-                break  # Break from retry loop on other errors or max retries exceeded
+                print(f"An error occurred during agent execution: {e}")
+                final_response_text = f"Sorry, an error occurred: {e}"
+                break  # Break from retry loop for other errors or max retries
         except Exception as e:
-            print(f"An unexpected error occurred during agent execution: {str(e)}")
-            final_response_text = f"Sorry, an unexpected error occurred: {str(e)}"
+            print(f"An unexpected error occurred during agent execution: {e}")
+            final_response_text = f"Sorry, an unexpected error occurred: {e}"
             break  # Break from retry loop
 
     print(f"<<< Agent Response: {final_response_text}")
