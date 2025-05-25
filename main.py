@@ -132,41 +132,25 @@ stock_runner = Runner(
 print(f"Runner created for agent '{stock_runner.agent.name}'.")
 
 
-def get_or_create_session(user_id: str) -> str:
-    """Gets an existing session ID for the user or creates a new one."""
-    session_id_candidate_base = f"session_{user_id}"
+def get_or_create_session(user_id):
+    if user_id not in active_sessions:
+        # Create a new session for this user
+        session_id = f"session_{user_id}"
+        session = session_service.create_session(
+            app_name=APP_NAME, user_id=user_id, session_id=session_id
+        )
+        active_sessions[user_id] = session_id
+        print(
+            f"New session created: App='{APP_NAME}', User='{user_id}', Session='{session_id}'"
+        )
+    else:
+        # Use existing session
+        session_id = active_sessions[user_id]
+        print(
+            f"Using existing session: App='{APP_NAME}', User='{user_id}', Session='{session_id}'"
+        )
 
-    if user_id in active_sessions:
-        cached_session_id = active_sessions[user_id]
-        try:
-            # Check if the session still exists in the service
-            session_service.get_session(session_id=cached_session_id)
-            print(f"Using existing session: {cached_session_id} for user: {user_id}")
-            return cached_session_id
-        except ValueError as e:
-            if "Session not found" in str(e):
-                print(
-                    f"Cached session {cached_session_id} not found in service. Creating a new one."
-                )
-                # Session expired or removed from service, proceed to create a new one
-                del active_sessions[user_id]  # Remove stale entry
-            else:
-                raise  # Re-raise other ValueErrors
-
-    # Create a new session
-    # Attempt with a base ID first
-    session_id_candidate = session_id_candidate_base
-    try:
-        new_session = session_service.create_session(session_id=session_id_candidate)
-    except ValueError:  # Potentially if ID already exists and service complains (though InMemory might allow overwrite or ignore)
-        # If collision or other issue, try a more unique ID
-        unique_suffix = secrets.token_hex(4)
-        session_id_candidate = f"{session_id_candidate_base}_{unique_suffix}"
-        new_session = session_service.create_session(session_id=session_id_candidate)
-
-    active_sessions[user_id] = new_session.id
-    print(f"Created new session: {new_session.id} for user: {user_id}")
-    return new_session.id
+    return session_id
 
 
 @app.post("/")
