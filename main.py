@@ -217,7 +217,7 @@ async def call_agent_async(query: str, user_id: str) -> str:
     for attempt in range(max_retries + 1):
         try:
             async for event in chosen_agent_runner.run_async(
-                session_id=session_id, new_message=content
+                user_id=user_id, session_id=session_id, new_message=content
             ):
                 if event.is_final_response():
                     if event.content and event.content.parts:
