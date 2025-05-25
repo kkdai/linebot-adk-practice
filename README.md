@@ -2,7 +2,7 @@
 
 ## Project Background
 
-This project is a LINE bot that uses Google ADK (Agent SDK) and Google Gemini models to generate responses to text inputs. The bot can answer questions in Traditional Chinese and provide helpful information. It supports both Google Gemini API and Google VertexAI for model hosting.
+This project is a LINE bot that uses Google ADK (Agent SDK) and Google Gemini models to generate responses to text inputs. The bot can answer questions in Traditional Chinese and provide helpful information. It supports both Google Gemini API and Google VertexAI for model hosting. It features multiple agents, including one for general queries and creative suggestions, and a specialized agent for stock market information.
 
 ## Screenshot
 
@@ -10,11 +10,14 @@ This project is a LINE bot that uses Google ADK (Agent SDK) and Google Gemini mo
 
 ## Features
 
-- Text message processing using AI models (Google ADK or Google Gemini)
-- Support for function calling with custom tools
-- Integration with LINE Messaging API
-- Built with FastAPI for high-performance async processing
-- Containerized with Docker for easy deployment
+- Text message processing using AI models (Google ADK with Google Gemini)
+- Multi-agent architecture:
+  - A general agent for creative plan suggestions (e.g., dating plans) using Google Search.
+  - A specialized agent for stock market queries (prices, performance, changes).
+- Support for function calling with custom tools for each agent.
+- Integration with LINE Messaging API.
+- Built with FastAPI for high-performance async processing.
+- Containerized with Docker for easy deployment.
 
 ## Technologies Used
 
@@ -24,6 +27,7 @@ This project is a LINE bot that uses Google ADK (Agent SDK) and Google Gemini mo
 - Google ADK (Agent SDK)
 - Google Gemini API
 - Google VertexAI (optional alternative to Gemini API)
+- yfinance (for stock data)
 - Docker
 - Google Cloud Run (for deployment)
 
@@ -58,16 +62,28 @@ This project is a LINE bot that uses Google ADK (Agent SDK) and Google Gemini mo
 
 ### Text Processing
 
-Send any text message to the LINE bot, and it will use the configured AI model to generate a response. The bot is optimized for Traditional Chinese responses.
+Send any text message to the LINE bot. The bot will route your query to the appropriate agent:
 
-### Available Tools
+- For general questions or creative suggestions (e.g., "Suggest a dating plan in Taipei for next weekend"), the general agent will respond.
+- For stock-related questions (e.g., "What's the price of AAPL?", "Best performing stock between TSLA and NVDA in the last 7 days?"), the stock agent will respond.
 
-The bot can be configured with various function tools such as:
+The bot is optimized for Traditional Chinese responses but will attempt to handle English queries for stock information.
 
-- Weather information retrieval
-- Translation services
-- Data lookup capabilities
-- Custom tools based on your specific needs
+### Available Tools & Agents
+
+The bot utilizes a multi-agent setup:
+
+1. **Location Search Agent (`root_agent`):**
+   - **Description:** Generates creative and fun plan suggestions (e.g., dating plans) based on location, dates, and user interests.
+   - **Tools:**
+     - `google_search`: To find current events, venues, and general information.
+
+2. **Stock Agent (`stock_agent`):**
+   - **Description:** Provides stock market information and analysis.
+   - **Tools:**
+     - `get_stock_price`: Fetches the current price of a given stock symbol.
+     - `get_price_change_percent`: Calculates the percentage change in a stock's price over a specified number of days.
+     - `get_best_performing`: Identifies the best-performing stock from a list over a given period.
 
 ## Deployment Options
 
@@ -135,6 +151,7 @@ docker run -p 8000:8000 \
 4. Deploy to Cloud Run:
 
    For Gemini API:
+
    ```bash
    gcloud run deploy linebot-adk \
      --image gcr.io/YOUR_PROJECT_ID/linebot-adk \
@@ -145,6 +162,7 @@ docker run -p 8000:8000 \
    ```
 
    For VertexAI (recommended for production):
+
    ```bash
    gcloud run deploy linebot-adk \
      --image gcr.io/YOUR_PROJECT_ID/linebot-adk \
@@ -201,6 +219,7 @@ For better security, store your API keys as secrets:
 3. Deploy with secrets:
 
    For Gemini API:
+
    ```bash
    gcloud run deploy linebot-adk \
      --image gcr.io/YOUR_PROJECT_ID/linebot-adk \
@@ -209,8 +228,9 @@ For better security, store your API keys as secrets:
      --allow-unauthenticated \
      --update-secrets=ChannelSecret=line-channel-secret:latest,ChannelAccessToken=line-channel-token:latest,GOOGLE_API_KEY=google-api-key:latest
    ```
-   
+
    For VertexAI:
+
    ```bash
    gcloud run deploy linebot-adk \
      --image gcr.io/YOUR_PROJECT_ID/linebot-adk \
@@ -224,7 +244,8 @@ For better security, store your API keys as secrets:
 
 After deployment, you can monitor your service through the Google Cloud Console:
 
-1. View logs: 
+1. View logs:
+
    ```bash
    gcloud logging read "resource.type=cloud_run_revision AND resource.labels.service_name=linebot-adk"
    ```

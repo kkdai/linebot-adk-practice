@@ -1,29 +1,28 @@
+from fastapi import Request, FastAPI, HTTPException
 import os
 import sys
-import asyncio
-from io import BytesIO
-
 import aiohttp
-from fastapi import Request, FastAPI, HTTPException
-from zoneinfo import ZoneInfo
 
 from linebot.models import MessageEvent, TextSendMessage
 from linebot.exceptions import InvalidSignatureError
 from linebot.aiohttp_async_http_client import AiohttpAsyncHttpClient
 from linebot import AsyncLineBotApi, WebhookParser
-from multi_tool_agent.agent import (
-    get_weather,
-    get_current_time,
-)
+
+# ADK and GenAI imports
 from google.adk.agents import Agent
 from google.adk.tools import google_search
-
-# Import necessary session components
 from google.adk.sessions import InMemorySessionService
 from google.adk.runners import Runner
 from google.genai import types
 
-# OpenAI Agent configuration
+# Import stock agent tools
+from multi_tool_agent.stock_agent import (
+    get_stock_price,
+    get_price_change_percent,
+    get_best_performing,
+)
+
+# OpenAI Agent configuration (Note: GOOGLE_API_KEY is used, not OpenAI)
 USE_VERTEX = os.getenv("GOOGLE_GENAI_USE_VERTEXAI") or "False"
 GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY") or ""
 
@@ -49,13 +48,14 @@ if USE_VERTEX == "True":  # Check if USE_VERTEX is true as a string
         raise ValueError(
             "Please set GOOGLE_CLOUD_LOCATION via env var or code when USE_VERTEX is true."
         )
-elif not GOOGLE_API_KEY:  # Original check for GOOGLE_API_KEY when USE_VERTEX is false
+elif not GOOGLE_API_KEY:
     raise ValueError("Please set GOOGLE_API_KEY via env var or code.")
 
 # Initialize the FastAPI app for LINEBot
 app = FastAPI()
-session = aiohttp.ClientSession()
-async_http_client = AiohttpAsyncHttpClient(session)
+# client_session for aiohttp
+client_session = aiohttp.ClientSession()
+async_http_client = AiohttpAsyncHttpClient(client_session)
 line_bot_api = AsyncLineBotApi(channel_access_token, async_http_client)
 parser = WebhookParser(channel_secret)
 
@@ -87,26 +87,41 @@ root_agent = Agent(
 )
 print(f"Agent '{root_agent.name}' created.")
 
+# --- Stock Agent Definition ---
+stock_agent = Agent(
+    name="stock_agent",
+    model="gemini-2.0-flash",  # Or your preferred model
+    description="Agent specialized in providing stock market information and analysis.",
+    instruction="""
+        You are an AI assistant specializing in stock market data.
+        Users will ask for stock prices, price changes, or the best performing stock from a list.
+        Use the provided tools to answer these questions accurately.
+        - For current price, use `get_stock_price`.
+        - For price change percentage over a period, use `get_price_change_percent`.
+        - For finding the best performing stock in a list over a period, use `get_best_performing`.
+        Always state the symbol and the period clearly in your response if applicable.
+        If a stock symbol is invalid or data is unavailable, inform the user clearly.
+    """,
+    tools=[
+        get_stock_price,
+        get_price_change_percent,
+        get_best_performing,
+    ],
+)
+print(f"Agent '{stock_agent.name}' created.")
+
 # --- Session Management ---
 # Key Concept: SessionService stores conversation history & state.
-# InMemorySessionService is simple, non-persistent storage for this tutorial.
 session_service = InMemorySessionService()
-
-# Define constants for identifying the interaction context
 APP_NAME = "linebot_adk_app"
-# Instead of fixed user_id and session_id, we'll now manage them dynamically
-
-# Dictionary to track active sessions
 active_sessions = {}
-
-# Create a function to get or create a session for a user
 
 
 def get_or_create_session(user_id):
     if user_id not in active_sessions:
         # Create a new session for this user
         session_id = f"session_{user_id}"
-        session = session_service.create_session(
+        session_service.create_session(  # Corrected: removed unused 'session' variable assignment
             app_name=APP_NAME, user_id=user_id, session_id=session_id
         )
         active_sessions[user_id] = session_id
@@ -114,16 +129,15 @@ def get_or_create_session(user_id):
             f"New session created: App='{APP_NAME}', User='{user_id}', Session='{session_id}'"
         )
     else:
-        # Use existing session
         session_id = active_sessions[user_id]
         print(
             f"Using existing session: App='{APP_NAME}', User='{user_id}', Session='{session_id}'"
         )
-
     return session_id
 
 
 # Key Concept: Runner orchestrates the agent execution loop.
+# Default runner for the root_agent
 runner = Runner(
     agent=root_agent,  # The agent we want to run
     app_name=APP_NAME,  # Associates runs with our app
@@ -131,12 +145,18 @@ runner = Runner(
 )
 print(f"Runner created for agent '{runner.agent.name}'.")
 
+# Runner for the stock_agent
+stock_runner = Runner(
+    agent=stock_agent,
+    app_name=APP_NAME,
+    session_service=session_service,
+)
+print(f"Runner created for agent '{stock_runner.agent.name}'.")
+
 
 @app.post("/")
 async def handle_callback(request: Request):
     signature = request.headers["X-Line-Signature"]
-
-    # get request body as text
     body = await request.body()
     body = body.decode()
 
@@ -160,9 +180,10 @@ async def handle_callback(request: Request):
             reply_msg = TextSendMessage(text=response)
             await line_bot_api.reply_message(event.reply_token, reply_msg)
         elif event.message.type == "image":
-            return "OK"
-        else:
-            continue
+            # return "OK" # Original line, can be pass if no specific OK is needed
+            pass  # Explicitly pass if no action
+        # else: # This else continue is redundant if the outer loop continues
+        # continue
 
     return "OK"
 
@@ -177,26 +198,43 @@ async def call_agent_async(query: str, user_id: str) -> str:
     # Prepare the user's message in ADK format
     content = types.Content(role="user", parts=[types.Part(text=query)])
 
-    final_response_text = "Agent did not produce a final response."  # Default
+    final_response_text = "Agent did not produce a final response."
+
+    # Simple routing logic
+    chosen_agent_runner = runner  # Default to the root_agent's runner
+    stock_keywords = [
+        "stock",
+        "price of",
+        "perform",
+        "ticker",
+        "symbol",
+        "shares",
+        "market",
+        "漲跌",
+        "股價",
+    ]  # Added Chinese keywords
+    if any(keyword in query.lower() for keyword in stock_keywords):
+        print(f"Routing to stock_agent for query: {query}")
+        chosen_agent_runner = stock_runner
+    else:
+        print(f"Routing to root_agent for query: {query}")
 
     try:
         # Key Concept: run_async executes the agent logic and yields Events.
-        # We iterate through events to find the final answer.
-        async for event in runner.run_async(
+        async for event in chosen_agent_runner.run_async(  # Use the chosen_agent_runner
             user_id=user_id, session_id=session_id, new_message=content
         ):
-            # You can uncomment the line below to see *all* events during execution
-            # print(f"  [Event] Author: {event.author}, Type: {type(event).__name__}, Final: {event.is_final_response()}, Content: {event.content}")
-
-            # Key Concept: is_final_response() marks the concluding message for the turn.
             if event.is_final_response():
                 if event.content and event.content.parts:
-                    # Assuming text response in the first part
-                    final_response_text = event.content.parts[0].text
-                elif (
-                    event.actions and event.actions.escalate
-                ):  # Handle potential errors/escalations
-                    final_response_text = f"Agent escalated: {event.error_message or 'No specific message.'}"
+                    final_response_text = "".join(
+                        part.text
+                        for part in event.content.parts
+                        if hasattr(part, "text")
+                    )
+                elif event.actions and event.actions.escalate:
+                    final_response_text = (
+                        f"Escalation from agent: {event.actions.escalate.message}"
+                    )
                 # Add more checks here if needed (e.g., specific error codes)
                 break  # Stop processing events once the final response is found
     except ValueError as e:
@@ -208,20 +246,38 @@ async def call_agent_async(query: str, user_id: str) -> str:
             session_id = get_or_create_session(user_id)  # Create a new one
             # Try again with the new session
             try:
-                async for event in runner.run_async(
+                async for (
+                    event
+                ) in chosen_agent_runner.run_async(  # Use the chosen_agent_runner
                     user_id=user_id, session_id=session_id, new_message=content
                 ):
-                    # Same event handling code as above
                     if event.is_final_response():
                         if event.content and event.content.parts:
-                            final_response_text = event.content.parts[0].text
+                            final_response_text = "".join(
+                                part.text
+                                for part in event.content.parts
+                                if hasattr(part, "text")
+                            )
                         elif event.actions and event.actions.escalate:
-                            final_response_text = f"Agent escalated: {event.error_message or 'No specific message.'}"
+                            final_response_text = f"Escalation from agent: {event.actions.escalate.message}"
                         break
             except Exception as e2:
-                final_response_text = f"Sorry, I encountered an error: {str(e2)}"
+                final_response_text = (
+                    f"Sorry, I encountered a persistent error after session"
+                    f" recreation: {str(e2)}"
+                )
         else:
             final_response_text = f"Sorry, I encountered an error: {str(e)}"
+    except Exception as e:  # Catch other potential errors during agent run
+        print(f"An unexpected error occurred during agent execution: {str(e)}")
+        final_response_text = f"Sorry, an unexpected error occurred: {str(e)}"
 
     print(f"<<< Agent Response: {final_response_text}")
     return final_response_text
+
+
+# Add lifespan event for session cleanup
+@app.on_event("shutdown")
+async def shutdown_event():
+    await client_session.close()
+    print("Client session closed.")
