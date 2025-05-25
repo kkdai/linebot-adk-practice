@@ -13,6 +13,8 @@ from google.adk.agents import Agent
 from google.adk.tools import google_search
 from google.adk.runners import Runner
 from google.genai import types
+from google.adk.sessions import InMemorySessionService  # Add this import
+import secrets  # For generating unique session ID parts
 
 # Import stock agent tools
 from multi_tool_agent.stock_agent import (
@@ -49,6 +51,10 @@ if USE_VERTEX == "True":  # Check if USE_VERTEX is true as a string
         )
 elif not GOOGLE_API_KEY:
     raise ValueError("Please set GOOGLE_API_KEY via env var or code.")
+
+# Initialize InMemorySessionService
+session_service = InMemorySessionService()
+active_sessions = {}  # Cache for active session IDs per user
 
 # Initialize the FastAPI app for LINEBot
 app = FastAPI()
@@ -114,14 +120,53 @@ APP_NAME = "linebot_adk_app"
 runner = Runner(
     agent=root_agent,
     app_name=APP_NAME,
+    session_service=session_service,  # Add session_service
 )
 print(f"Runner created for agent '{runner.agent.name}'.")
 
 stock_runner = Runner(
     agent=stock_agent,
     app_name=APP_NAME,
+    session_service=session_service,  # Add session_service
 )
 print(f"Runner created for agent '{stock_runner.agent.name}'.")
+
+
+def get_or_create_session(user_id: str) -> str:
+    """Gets an existing session ID for the user or creates a new one."""
+    session_id_candidate_base = f"session_{user_id}"
+
+    if user_id in active_sessions:
+        cached_session_id = active_sessions[user_id]
+        try:
+            # Check if the session still exists in the service
+            session_service.get_session(session_id=cached_session_id)
+            print(f"Using existing session: {cached_session_id} for user: {user_id}")
+            return cached_session_id
+        except ValueError as e:
+            if "Session not found" in str(e):
+                print(
+                    f"Cached session {cached_session_id} not found in service. Creating a new one."
+                )
+                # Session expired or removed from service, proceed to create a new one
+                del active_sessions[user_id]  # Remove stale entry
+            else:
+                raise  # Re-raise other ValueErrors
+
+    # Create a new session
+    # Attempt with a base ID first
+    session_id_candidate = session_id_candidate_base
+    try:
+        new_session = session_service.create_session(session_id=session_id_candidate)
+    except ValueError:  # Potentially if ID already exists and service complains (though InMemory might allow overwrite or ignore)
+        # If collision or other issue, try a more unique ID
+        unique_suffix = secrets.token_hex(4)
+        session_id_candidate = f"{session_id_candidate_base}_{unique_suffix}"
+        new_session = session_service.create_session(session_id=session_id_candidate)
+
+    active_sessions[user_id] = new_session.id
+    print(f"Created new session: {new_session.id} for user: {user_id}")
+    return new_session.id
 
 
 @app.post("/")
@@ -161,14 +206,10 @@ async def handle_callback(request: Request):
 async def call_agent_async(query: str, user_id: str) -> str:
     """Sends a query to the agent and prints the final response."""
     print(f"\n>>> User Query: {query}")
-
-    # Prepare the user's message in ADK format
     content = types.Content(role="user", parts=[types.Part(text=query)])
-
     final_response_text = "Agent did not produce a final response."
 
-    # Simple routing logic
-    chosen_agent_runner = runner  # Default to the root_agent's runner
+    chosen_agent_runner = runner
     stock_keywords = [
         "stock",
         "price of",
@@ -179,34 +220,50 @@ async def call_agent_async(query: str, user_id: str) -> str:
         "market",
         "漲跌",
         "股價",
-    ]  # Added Chinese keywords
+    ]
     if any(keyword in query.lower() for keyword in stock_keywords):
         print(f"Routing to stock_agent for query: {query}")
         chosen_agent_runner = stock_runner
     else:
         print(f"Routing to root_agent for query: {query}")
 
-    try:
-        # Key Concept: run_async executes the agent logic and yields Events.
-        async for event in chosen_agent_runner.run_async(  # Use the chosen_agent_runner
-            user_id=user_id, new_message=content
-        ):
-            if event.is_final_response():
-                if event.content and event.content.parts:
-                    final_response_text = "".join(
-                        part.text
-                        for part in event.content.parts
-                        if hasattr(part, "text")
-                    )
-                elif event.actions and event.actions.escalate:
-                    final_response_text = (
-                        f"Escalation from agent: {event.actions.escalate.message}"
-                    )
-                # Add more checks here if needed (e.g., specific error codes)
-                break  # Stop processing events once the final response is found
-    except Exception as e:  # Catch other potential errors during the initial agent run
-        print(f"An unexpected error occurred during agent execution: {str(e)}")
-        final_response_text = f"Sorry, an unexpected error occurred: {str(e)}"
+    session_id = get_or_create_session(user_id)
+    max_retries = 1
+
+    for attempt in range(max_retries + 1):
+        try:
+            async for event in chosen_agent_runner.run_async(
+                session_id=session_id, new_message=content
+            ):
+                if event.is_final_response():
+                    if event.content and event.content.parts:
+                        final_response_text = "".join(
+                            part.text
+                            for part in event.content.parts
+                            if hasattr(part, "text")
+                        )
+                    elif event.actions and event.actions.escalate:
+                        final_response_text = (
+                            f"Escalation from agent: {event.actions.escalate.message}"
+                        )
+                    break
+            break  # Break from retry loop if successful
+        except ValueError as e:
+            if "Session not found" in str(e) and attempt < max_retries:
+                print(
+                    f"Attempt {attempt + 1}: Session {session_id} not found. Recreating session and retrying."
+                )
+                if user_id in active_sessions:  # Clean up potentially stale cache
+                    del active_sessions[user_id]
+                session_id = get_or_create_session(user_id)  # Get a new session_id
+            else:
+                print(f"An error occurred during agent execution: {str(e)}")
+                final_response_text = f"Sorry, an error occurred: {str(e)}"
+                break  # Break from retry loop on other errors or max retries exceeded
+        except Exception as e:
+            print(f"An unexpected error occurred during agent execution: {str(e)}")
+            final_response_text = f"Sorry, an unexpected error occurred: {str(e)}"
+            break  # Break from retry loop
 
     print(f"<<< Agent Response: {final_response_text}")
     return final_response_text
