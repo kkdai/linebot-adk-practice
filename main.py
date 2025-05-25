@@ -13,7 +13,6 @@ from google.adk.agents import Agent
 from google.adk.runners import Runner
 from google.genai import types
 from google.adk.sessions import InMemorySessionService  # Add this import
-import secrets  # For generating unique session ID parts
 
 # Import stock agent tools
 from multi_tool_agent.stock_agent import (
@@ -96,16 +95,16 @@ runner = Runner(
 print(f"Runner created for agent '{runner.agent.name}'.")
 
 
-def get_or_create_session(user_id):
+async def get_or_create_session(user_id):
     if user_id not in active_sessions:
         # Create a new session for this user
         session_id = f"session_{user_id}"
-        session = session_service.create_session(
+        session = await session_service.create_session(
             app_name=APP_NAME, user_id=user_id, session_id=session_id
         )
         active_sessions[user_id] = session_id
         print(
-            f"New session created: App='{APP_NAME}', User='{user_id}', Session='{session_id}'"
+            f"New session created: App='{APP_NAME}', User='{user_id}', Session='{session.id}'"
         )
     else:
         # Use existing session
@@ -157,7 +156,7 @@ async def call_agent_async(query: str, user_id: str) -> str:
     print(f"\n>>> User Query: {query}")
 
     # Get or create a session for this user
-    session_id = get_or_create_session(user_id)
+    session_id = await get_or_create_session(user_id)
 
     # Prepare the user's message in ADK format
     content = types.Content(role="user", parts=[types.Part(text=query)])
@@ -186,13 +185,19 @@ async def call_agent_async(query: str, user_id: str) -> str:
                 break  # Stop processing events once the final response is found
     except ValueError as e:
         if "Session not found" in str(e):
-            print(f"Initial 'Session not found' error: {str(e)}. Attempting to recreate session and retry.")
+            print(
+                f"Initial 'Session not found' error: {str(e)}. Attempting to recreate session and retry."
+            )
             active_sessions.pop(user_id, None)
-            new_session_id = get_or_create_session(user_id) # Renamed to avoid confusion
+            new_session_id = await get_or_create_session(
+                user_id
+            )  # Renamed to avoid confusion
             print(f"Retrying with new session: {new_session_id}")
             try:
                 # Initialize final_response_text for the retry attempt
-                retry_final_response_text = "Agent did not produce a final response on retry." 
+                retry_final_response_text = (
+                    "Agent did not produce a final response on retry."
+                )
                 async for event in runner.run_async(
                     user_id=user_id, session_id=new_session_id, new_message=content
                 ):
@@ -201,14 +206,20 @@ async def call_agent_async(query: str, user_id: str) -> str:
                             retry_final_response_text = event.content.parts[0].text
                         elif event.actions and event.actions.escalate:
                             retry_final_response_text = f"Agent escalated on retry: {event.error_message or 'No specific message.'}"
-                        break 
-                final_response_text = retry_final_response_text # Assign retry result here
+                        break
+                final_response_text = (
+                    retry_final_response_text  # Assign retry result here
+                )
             except Exception as e2:
                 print(f"Error during retry attempt: {str(e2)}")
-                final_response_text = f"Sorry, I encountered an error after a session issue: {str(e2)}"
+                final_response_text = (
+                    f"Sorry, I encountered an error after a session issue: {str(e2)}"
+                )
         else:
             # This is for ValueErrors not related to "Session not found"
-            print(f"Error processing request (non-session related ValueError): {str(e)}")
+            print(
+                f"Error processing request (non-session related ValueError): {str(e)}"
+            )
             final_response_text = f"Sorry, I encountered an error: {str(e)}"
     except Exception as ex:
         # Catch any other unexpected errors
