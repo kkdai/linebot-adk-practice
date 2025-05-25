@@ -63,7 +63,7 @@ line_bot_api = AsyncLineBotApi(channel_access_token, async_http_client)
 parser = WebhookParser(channel_secret)
 
 # --- Stock Agent Definition ---
-stock_agent = Agent(
+root_agent = Agent(
     name="stock_agent",
     model="gemini-2.0-flash",  # Or your preferred model
     description="Agent specialized in providing stock market information and analysis.",
@@ -83,15 +83,17 @@ stock_agent = Agent(
         get_best_performing,
     ],
 )
-print(f"Agent '{stock_agent.name}' created.")
+print(f"Agent '{root_agent.name}' created.")
 
 APP_NAME = "linebot_adk_app"
-root_agent = Runner(
-    agent=stock_agent,
-    app_name=APP_NAME,
-    session_service=session_service,  # Add session_service
+
+# Key Concept: Runner orchestrates the agent execution loop.
+runner = Runner(
+    agent=root_agent,  # The agent we want to run
+    app_name=APP_NAME,  # Associates runs with our app
+    session_service=session_service,  # Uses our session manager
 )
-print(f"Runner created for agent '{root_agent.agent.name}'.")
+print(f"Runner created for agent '{runner.agent.name}'.")
 
 
 def get_or_create_session(user_id):
@@ -113,15 +115,6 @@ def get_or_create_session(user_id):
         )
 
     return session_id
-
-
-# Key Concept: Runner orchestrates the agent execution loop.
-runner = Runner(
-    agent=root_agent,  # The agent we want to run
-    app_name=APP_NAME,  # Associates runs with our app
-    session_service=session_service,  # Uses our session manager
-)
-print(f"Runner created for agent '{runner.agent.name}'.")
 
 
 @app.post("/")
