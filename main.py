@@ -14,11 +14,11 @@ from google.adk.runners import Runner
 from google.genai import types
 from google.adk.sessions import InMemorySessionService  # Add this import
 
-# Import stock agent tools
-from multi_tool_agent.stock_agent import (
-    get_stock_price,
-    get_price_change_percent,
-    get_best_performing,
+# Import arxiv agent tools
+from multi_tool_agent.arxiv_agent import (
+    search_arxiv_papers,
+    summarize_arxiv_paper,
+    answer_paper_question,
 )
 
 # OpenAI Agent configuration (Note: GOOGLE_API_KEY is used, not OpenAI)
@@ -61,25 +61,29 @@ async_http_client = AiohttpAsyncHttpClient(client_session)
 line_bot_api = AsyncLineBotApi(channel_access_token, async_http_client)
 parser = WebhookParser(channel_secret)
 
-# --- Stock Agent Definition ---
+# --- ArXiv Agent Definition ---
 root_agent = Agent(
-    name="stock_agent",
-    model="gemini-2.0-flash",  # Or your preferred model
-    description="Agent specialized in providing stock market information and analysis.",
+    name="arxiv_agent",
+    model="gemini-2.0-flash", # Consistent with previous agent's model choice
+    description="Agent specialized in searching arXiv, summarizing papers, and answering questions about them.",
     instruction="""
-        You are an AI assistant specializing in stock market data.
-        Users will ask for stock prices, price changes, or the best performing stock from a list.
-        Use the provided tools to answer these questions accurately.
-        - For current price, use `get_stock_price`.
-        - For price change percentage over a period, use `get_price_change_percent`.
-        - For finding the best performing stock in a list over a period, use `get_best_performing`.
-        Always state the symbol and the period clearly in your response if applicable.
-        If a stock symbol is invalid or data is unavailable, inform the user clearly.
+        You are an AI assistant specializing in interacting with the arXiv repository.
+        Users can ask you to:
+        1. Search for papers on arXiv based on a query. Use the `search_arxiv_papers` tool.
+        2. Summarize a specific arXiv paper when given its URL or arXiv ID. Use the `summarize_arxiv_paper` tool. The summary will be the paper's abstract.
+        3. Answer questions about a specific arXiv paper. Use the `answer_paper_question` tool. This tool will try to find relevant information in the paper's abstract.
+
+        When a user provides an arXiv link or ID and asks for a summary, use `summarize_arxiv_paper`.
+        When a user provides an arXiv link or ID and asks a specific question about it, use `answer_paper_question`.
+        When a user provides a general query for papers, use `search_arxiv_papers`.
+
+        Provide clear and concise answers. If a tool returns an error or no information, inform the user politely.
+        When providing paper details, always try to include title, authors, summary/abstract, and arXiv ID.
     """,
     tools=[
-        get_stock_price,
-        get_price_change_percent,
-        get_best_performing,
+        search_arxiv_papers,
+        summarize_arxiv_paper,
+        answer_paper_question,
     ],
 )
 print(f"Agent '{root_agent.name}' created.")
