@@ -80,7 +80,7 @@ root_agent = Agent(
         Provide clear and concise answers. If a tool returns an error or no information, inform the user politely.
         When providing paper details, always try to include title, authors, summary/abstract, and arXiv ID.
 
-        Reply in zh-TW.
+        Reply in zh-TW. Don't use markdown formatting.
     """,
     tools=[
         search_arxiv_papers,
