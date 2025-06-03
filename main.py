@@ -143,6 +143,16 @@ async def handle_callback(request: Request):
             user_id = event.source.user_id
             print(f"Received message: {msg} from user: {user_id}")
 
+            # --- Hugging Face paper URL auto-convert to arXiv ---
+            import re
+            hf_paper_pattern = r"https://huggingface.co/papers/(\\d{4}\\.\\d{5})"
+            match = re.search(hf_paper_pattern, msg)
+            if match:
+                arxiv_id = match.group(1)
+                msg = f"arXiv:{arxiv_id}"
+                print(f"Detected Hugging Face paper URL. Converted to arXiv ID: {arxiv_id}")
+            # ---------------------------------------------------
+
             # Use the user's prompt directly with the agent
             response = await call_agent_async(msg, user_id)
             reply_msg = TextSendMessage(text=response)
