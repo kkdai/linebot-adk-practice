@@ -8,3 +8,5 @@ Pillow
 arxiv>=2.2.0
 google-generativeai
 aiohttp
+httpx
+pdfplumber
